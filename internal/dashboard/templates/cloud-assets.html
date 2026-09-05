@@ -1,0 +1,102 @@
+{{define "content"}}
+<style>
+  .cloud-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .cloud-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .cloud-card .count { font-size: 28px; font-weight: 700; color: var(--accent); }
+  .cloud-card .label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .provider-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+  .provider-aws { background: #ff990020; color: #ff9900; }
+  .provider-azure { background: #0078d420; color: #0078d4; }
+  .provider-gcp { background: #4285f420; color: #4285f4; }
+  .provider-k8s { background: #326ce520; color: #326ce5; }
+  .provider-other { background: #6c757d20; color: #adb5bd; }
+  .finding-url { font-family: monospace; font-size: 12px; word-break: break-all; color: var(--text); }
+  .severity-critical { color: #ff4444; }
+  .severity-high { color: #ff8800; }
+  .severity-medium { color: #ffcc00; }
+  .severity-low { color: #4488ff; }
+  .severity-info { color: var(--muted); }
+  .filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .filter-bar select, .filter-bar input { background: var(--bg2); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 4px; font-size: 13px; }
+  .no-data { text-align: center; color: var(--muted); padding: 40px 0; }
+</style>
+
+<div class="cloud-grid">
+  <div class="cloud-card"><div class="count" id="total-cloud">-</div><div class="label">Total Cloud Findings</div></div>
+  <div class="cloud-card"><div class="count" id="critical-cloud" style="color:#ff4444">-</div><div class="label">Critical</div></div>
+  <div class="cloud-card"><div class="count" id="high-cloud" style="color:#ff8800">-</div><div class="label">High</div></div>
+  <div class="cloud-card"><div class="count" id="accessible-cloud" style="color:#44ff44">-</div><div class="label">Accessible</div></div>
+</div>
+
+<div class="filter-bar">
+  <select id="cf-provider" onchange="loadCloudFindings()">
+    <option value="">All Providers</option>
+    <option value="aws">AWS</option>
+    <option value="azure">Azure</option>
+    <option value="gcp">GCP</option>
+    <option value="kubernetes">Kubernetes</option>
+    <option value="other">Other</option>
+  </select>
+  <select id="cf-severity" onchange="loadCloudFindings()">
+    <option value="">All Severities</option>
+    <option value="critical">Critical</option>
+    <option value="high">High</option>
+    <option value="medium">Medium</option>
+    <option value="low">Low</option>
+    <option value="info">Info</option>
+  </select>
+  <input id="cf-search" placeholder="Search findings..." oninput="loadCloudFindings()">
+</div>
+
+<div class="card">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Provider</th>
+        <th>URL</th>
+        <th>Severity</th>
+        <th>Detail</th>
+        <th>Accessible</th>
+        <th>First Seen</th>
+        <th>Last Seen</th>
+      </tr>
+    </thead>
+    <tbody id="cf-tbody"></tbody>
+  </table>
+</div>
+
+<script>
+async function loadCloudFindings() {
+  try {
+    const data = await apiFetch('/api/cloud-findings?provider=' + (document.getElementById('cf-provider').value || '') + '&severity=' + (document.getElementById('cf-severity').value || ''));
+    const items = data.data || [];
+    const total = data.total || items.length;
+    document.getElementById('total-cloud').textContent = total;
+    document.getElementById('critical-cloud').textContent = items.filter(i => i.severity === 'critical').length;
+    document.getElementById('high-cloud').textContent = items.filter(i => i.severity === 'high').length;
+    document.getElementById('accessible-cloud').textContent = items.filter(i => i.accessible).length;
+
+    const tbody = document.getElementById('cf-tbody');
+    if (!items.length) { tbody.innerHTML = '<tr><td colspan="8" class="no-data">No cloud findings yet</td></tr>'; return; }
+    const search = (document.getElementById('cf-search').value || '').toLowerCase();
+    const filtered = search ? items.filter(i => (i.url||'').toLowerCase().includes(search) || (i.detail||'').toLowerCase().includes(search)) : items;
+    tbody.innerHTML = filtered.map(i => `
+      <tr>
+        <td><strong>${esc(i.finding_type)}</strong></td>
+        <td><span class="provider-badge provider-${esc(i.provider || 'other')}">${esc(i.provider || '?')}</span></td>
+        <td class="finding-url">${esc(i.url)}</td>
+        <td><span class="severity-${esc(i.severity)}">${esc(i.severity)}</span></td>
+        <td>${esc(i.detail)}</td>
+        <td>${i.accessible ? '<span style="color:#44ff44">&#x2714;</span>' : '<span style="color:#666">&#x2718;</span>'}</td>
+        <td>${fmtDate(i.first_seen)}</td>
+        <td>${fmtDate(i.last_seen)}</td>
+      </tr>
+    `).join('');
+  } catch(e) { console.error('cloud findings error', e); }
+}
+loadCloudFindings();
+</script>
+{{end}}
+
+{{define "scripts"}}{{end}}

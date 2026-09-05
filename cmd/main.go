@@ -110,10 +110,10 @@ func cmdScan() *cobra.Command {
 			logger := makeLogger()
 			proc := processor.New(cfg, database, logger)
 			tg := notify.New(
-				cfg.Telegram.BotToken,
-				cfg.Telegram.ChatID,
-				cfg.Telegram.MinSeverity,
-				cfg.Telegram.Enabled,
+				cfg.Alerting.Telegram.BotToken,
+				cfg.Alerting.Telegram.ChatID,
+				cfg.Alerting.MinSeverity,
+				cfg.Alerting.Telegram.Enabled,
 			)
 			defer tg.Close()
 
@@ -193,10 +193,10 @@ func cmdServe() *cobra.Command {
 			proc := processor.New(cfg, database, logger)
 			dash := dashboard.New(cfg, database, logger)
 			tg := notify.New(
-				cfg.Telegram.BotToken,
-				cfg.Telegram.ChatID,
-				cfg.Telegram.MinSeverity,
-				cfg.Telegram.Enabled,
+				cfg.Alerting.Telegram.BotToken,
+				cfg.Alerting.Telegram.ChatID,
+				cfg.Alerting.MinSeverity,
+				cfg.Alerting.Telegram.Enabled,
 			)
 			defer tg.Close()
 
@@ -259,10 +259,10 @@ func cmdMonitor() *cobra.Command {
 			logger := makeLogger()
 			proc := processor.New(cfg, database, logger)
 			tg := notify.New(
-				cfg.Telegram.BotToken,
-				cfg.Telegram.ChatID,
-				cfg.Telegram.MinSeverity,
-				cfg.Telegram.Enabled,
+				cfg.Alerting.Telegram.BotToken,
+				cfg.Alerting.Telegram.ChatID,
+				cfg.Alerting.MinSeverity,
+				cfg.Alerting.Telegram.Enabled,
 			)
 			defer tg.Close()
 
@@ -440,11 +440,29 @@ scheduler:
   enabled: false
   schedule: "0 0 2 * * *"  # daily 02:00
 
-telegram:
-  enabled: false
-  bot_token: ""            # @BotFather token
-  chat_id: ""              # your chat ID
-  min_severity: "high"     # critical, high, medium, low, info
+alerting:
+  telegram:
+    enabled: false
+    bot_token: ""            # get from @BotFather on Telegram
+    chat_id: ""              # your chat or group ID
+  min_severity: "high"       # critical, high, medium, low, info
+  new_only: true             # only alert on first occurrence
+  alert_on:
+    new_subdomain: true
+    high_risk_port: true
+    js_secret: true
+    interesting_host: true
+    host_down: false         # noisy — disable by default
+    new_technology: true
+
+tech_checks:
+  enabled: true
+  threads: 10
+  timeout: 8                 # seconds per HTTP request
+
+cloud_recon:
+  enabled: true
+  timeout: 8
 
 tools:
   subfinder_path:    "subfinder"

@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"regexp"
 	"strings"
@@ -310,6 +311,36 @@ var secretPatterns = []secretPattern{
 	{"slack-token", regexp.MustCompile("xox[baprs]-[A-Za-z0-9\\-]{10,}"), "high", 0},
 	{"internal-ip", regexp.MustCompile("\"((?:10|172\\.(?:1[6-9]|2\\d|3[01])|192\\.168)\\.\\d{1,3}\\.\\d{1,3})\""), "medium", 1},
 	{"s3-bucket", regexp.MustCompile("(?i)([a-z0-9\\-_.]{3,63})\\.s3[.\\-]amazonaws\\.com"), "medium", 1},
+	// HIGH VALUE — CRITICAL severity
+	{"twilio-account", regexp.MustCompile("AC[a-z0-9]{32}"), "critical", 0},
+	{"sendgrid-api", regexp.MustCompile("SG\\.[a-zA-Z0-9_-]{22}\\.[a-zA-Z0-9_-]{43}"), "critical", 0},
+	{"mailgun-api", regexp.MustCompile("key-[a-z0-9]{32}"), "critical", 0},
+	{"npm-token", regexp.MustCompile("npm_[A-Za-z0-9]{36}"), "critical", 0},
+	{"docker-hub-token", regexp.MustCompile("dckr_pat_[A-Za-z0-9_-]{27}"), "critical", 0},
+	{"shopify-token", regexp.MustCompile("shpat_[a-fA-F0-9]{32}|shpss_[a-fA-F0-9]{32}"), "critical", 0},
+	{"firebase-key", regexp.MustCompile("AIza[0-9A-Za-z\\-_]{35}"), "critical", 0},
+	{"square-token", regexp.MustCompile("sq0atp-[0-9A-Za-z\\-_]{22}"), "critical", 0},
+	{"square-oauth", regexp.MustCompile("sq0csp-[0-9A-Za-z\\-_]{43}"), "critical", 0},
+	{"braintree-token", regexp.MustCompile("access_token\\$production\\$[0-9a-z]{16}\\$[0-9a-f]{32}"), "critical", 0},
+	{"flutterwave-secret", regexp.MustCompile("FLWSECK-[a-zA-Z0-9]{32}-X"), "critical", 0},
+	{"paystack-secret", regexp.MustCompile("sk_live_[a-zA-Z0-9]{40}"), "critical", 0},
+	{"razorpay-key", regexp.MustCompile("rzp_live_[a-zA-Z0-9]{14}"), "critical", 0},
+	{"ssh-private-key", regexp.MustCompile("-----BEGIN OPENSSH PRIVATE KEY-----"), "critical", 0},
+	{"pgp-private-key", regexp.MustCompile("-----BEGIN PGP PRIVATE KEY BLOCK-----"), "critical", 0},
+	{"sentry-dsn", regexp.MustCompile("https://[a-z0-9]{32}@[a-z0-9]+\\.ingest\\.sentry\\.io/[0-9]+"), "critical", 0},
+	{"vault-token", regexp.MustCompile("s\\.[a-zA-Z0-9]{24}"), "high", 0},
+	{"linear-api", regexp.MustCompile("lin_api_[a-zA-Z0-9]{40}"), "critical", 0},
+	{"notion-api", regexp.MustCompile("secret_[a-zA-Z0-9]{43}"), "critical", 0},
+	{"heroku-api", regexp.MustCompile("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"), "high", 0},
+	{"cloudflare-token", regexp.MustCompile("[A-Za-z0-9_-]{40}"), "high", 0},
+	{"okta-token", regexp.MustCompile("00[a-zA-Z0-9_-]{40}"), "critical", 0},
+	{"pagerduty-key", regexp.MustCompile("[uo]_[a-z0-9]{16}"), "high", 0},
+	// MEDIUM severity patterns
+	{"graphql-endpoint", regexp.MustCompile("(?i)(?:fetch|axios|get|post)\\s*\\(\\s*[\"']/graphql"), "medium", 0},
+	{"internal-service-url", regexp.MustCompile("http://[a-z0-9\\-]+:\\d{2,5}"), "medium", 0},
+	{"k8s-internal", regexp.MustCompile("(?i)kubernetes\\.default\\.svc|svc\\.cluster\\.local"), "medium", 0},
+	{"env-secret-leak", regexp.MustCompile("(?i)process\\.env\\.[A-Z_]{5,}|os\\.environ\\[['\"][A-Z_]{5,}"), "medium", 0},
+	{"webhook-url", regexp.MustCompile("https://hooks\\.[a-z]+\\.[a-z]+/[^\\s\"']+"), "medium", 0},
 }
 
 func extractSecrets(content, jsURL string) []Finding {
@@ -332,6 +363,25 @@ func extractSecrets(content, jsURL string) []Finding {
 				if value == "" || isFP(value, pat.name) {
 					continue
 				}
+
+				// Skip findings in comments
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "//") {
+					continue
+				}
+
+				// Skip findings surrounded by template syntax
+				if strings.Contains(value, "{{") || strings.Contains(value, "}}") ||
+					strings.Contains(value, "<%") || strings.Contains(value, "%>") {
+					continue
+				}
+
+				// Calculate entropy and skip low-entropy long values
+				entropy := shannonEntropy(value)
+				if len(value) > 20 && entropy < 3.5 {
+					continue
+				}
+
 				ctx := snippet(lines, lineNum, 80)
 				findings = append(findings, Finding{
 					JSURL: jsURL, FindingType: pat.name,
@@ -341,6 +391,25 @@ func extractSecrets(content, jsURL string) []Finding {
 		}
 	}
 	return findings
+}
+
+func shannonEntropy(s string) float64 {
+	if len(s) == 0 {
+		return 0
+	}
+	freq := make(map[rune]float64)
+	for _, c := range s {
+		freq[c]++
+	}
+	length := float64(len(s))
+	entropy := 0.0
+	for _, count := range freq {
+		p := count / length
+		if p > 0 {
+			entropy -= p * math.Log2(p)
+		}
+	}
+	return entropy
 }
 
 var (
@@ -429,8 +498,15 @@ func extractSensitiveFiles(content, jsURL string) []Finding {
 }
 
 func isFP(val, ptype string) bool {
-	for _, p := range []string{"your_", "YOUR_", "example", "EXAMPLE", "placeholder", "changeme", "xxxxxxx"} {
-		if strings.Contains(val, p) {
+	lower := strings.ToLower(val)
+	placeholders := []string{
+		"your_", "YOUR_", "example", "EXAMPLE", "placeholder", "changeme",
+		"xxxxxxx", "test", "TEST", "demo", "DEMO", "sample", "SAMPLE",
+		"xxx", "000", "aaa", "change_me", "CHANGE_ME", "todo", "TODO",
+		"fixme", "FIXME", "replace", "REPLACE", "insert", "INSERT",
+	}
+	for _, p := range placeholders {
+		if strings.Contains(lower, p) {
 			return true
 		}
 	}
@@ -441,14 +517,30 @@ func isFP(val, ptype string) bool {
 }
 
 func snippet(lines []string, lineNum, maxLen int) string {
-	if lineNum >= len(lines) {
-		return ""
+	start := lineNum - 3
+	if start < 0 {
+		start = 0
 	}
-	line := strings.TrimSpace(lines[lineNum])
-	if len(line) > maxLen {
-		return line[:maxLen] + "..."
+	end := lineNum + 4
+	if end > len(lines) {
+		end = len(lines)
 	}
-	return line
+	var parts []string
+	for i := start; i < end; i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed == "" {
+			continue
+		}
+		if len(trimmed) > maxLen {
+			trimmed = trimmed[:maxLen] + "..."
+		}
+		parts = append(parts, trimmed)
+	}
+	result := strings.Join(parts, " | ")
+	if len(result) > 500 {
+		result = result[:500]
+	}
+	return result
 }
 
 func dedup(findings []Finding) []Finding {

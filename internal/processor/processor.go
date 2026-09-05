@@ -8,8 +8,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/expl0itlab/vantage/internal/alerting"
 	"github.com/expl0itlab/vantage/internal/attacksurface"
 	"github.com/expl0itlab/vantage/internal/banner"
+	"github.com/expl0itlab/vantage/internal/cloudrecon"
 	"github.com/expl0itlab/vantage/internal/config"
 	"github.com/expl0itlab/vantage/internal/db"
 	"github.com/expl0itlab/vantage/internal/discovery"
@@ -18,6 +20,7 @@ import (
 	"github.com/expl0itlab/vantage/internal/netexpand"
 	"github.com/expl0itlab/vantage/internal/scanner"
 	"github.com/expl0itlab/vantage/internal/screenshot"
+	"github.com/expl0itlab/vantage/internal/techchecks"
 )
 
 type Processor struct {
@@ -29,6 +32,9 @@ type Processor struct {
 	bannerGrab   *banner.Grabber
 	screenshoter *screenshot.Engine
 	netExpand    *netexpand.Expander
+	alertMgr     *alerting.AlertManager
+	techRunner   *techchecks.Runner
+	cloudScanner *cloudrecon.Scanner
 	logger       func(string, ...interface{})
 	onEvent      func(string, interface{})
 }
@@ -37,6 +43,37 @@ func New(cfg *config.Config, database *db.DB, logger func(string, ...interface{}
 	if logger == nil {
 		logger = func(s string, a ...interface{}) { fmt.Printf("[processor] "+s+"\n", a...) }
 	}
+
+	alertDB := &dbAlertAdapter{db: database}
+	alertMgr := alerting.New(
+		alertDB,
+		cfg.Alerting.Telegram.BotToken,
+		cfg.Alerting.Telegram.ChatID,
+		cfg.Alerting.MinSeverity,
+		cfg.Alerting.NewOnly,
+		alerting.AlertConfig{
+			NewSubdomain:    cfg.Alerting.AlertOn.NewSubdomain,
+			HighRiskPort:    cfg.Alerting.AlertOn.HighRiskPort,
+			JSSecret:        cfg.Alerting.AlertOn.JSSecret,
+			InterestingHost: cfg.Alerting.AlertOn.InterestingHost,
+			HostDown:        cfg.Alerting.AlertOn.HostDown,
+			NewTechnology:   cfg.Alerting.AlertOn.NewTechnology,
+		},
+		logger,
+	)
+	if cfg.Alerting.Telegram.Enabled {
+		alertMgr.Start()
+	}
+
+	techThreads := cfg.TechChecks.Threads
+	if techThreads == 0 {
+		techThreads = 10
+	}
+	techTimeout := cfg.TechChecks.Timeout
+	if techTimeout == 0 {
+		techTimeout = 8
+	}
+
 	return &Processor{
 		cfg:        cfg,
 		db:         database,
@@ -57,12 +94,27 @@ func New(cfg *config.Config, database *db.DB, logger func(string, ...interface{}
 			cfg.Scanning.NetExpand.Ports,
 			logger,
 		),
-		logger:  logger,
-		onEvent: func(string, interface{}) {},
+		alertMgr:     alertMgr,
+		techRunner:   techchecks.New(techTimeout, techThreads, logger),
+		cloudScanner: cloudrecon.New(cfg.CloudRecon.Timeout, logger),
+		logger:       logger,
+		onEvent:      func(string, interface{}) {},
 	}
 }
 
 func (p *Processor) SetEventHook(fn func(string, interface{})) { p.onEvent = fn }
+
+type dbAlertAdapter struct {
+	db *db.DB
+}
+
+func (a *dbAlertAdapter) HasAlerted(domain, eventType, value string) (bool, error) {
+	return a.db.HasAlerted(domain, eventType, value)
+}
+
+func (a *dbAlertAdapter) RecordAlert(domain, eventType, message string, success bool) error {
+	return a.db.RecordAlert(domain, eventType, message, success)
+}
 
 type ScanResult struct {
 	ScanID  int64
@@ -151,9 +203,54 @@ func (p *Processor) RunScan(ctx context.Context, domain, profileName string) (*S
 			p.change(scanID, domain, "new_subdomain", "medium",
 				fmt.Sprintf("New subdomain: %s (%s)", sub, ip),
 				map[string]interface{}{"subdomain": sub, "ip": ip})
+			p.alertMgr.Send(alerting.AlertEvent{
+				Domain: domain, EventType: "new_subdomain", Value: sub,
+				Severity: "medium", Title: "New Subdomain",
+				Details: map[string]interface{}{"subdomain": sub, "ip": ip, "resolved": ip != ""},
+				ScanID:  scanID,
+			})
 		}
 	}
 	p.logger("[2] stored %d assets", result.Stats.AssetsFound)
+
+	uniqueIPs := uniqueValues(ipMap)
+
+	// ── Phase 2b: Cloud Recon ──────────────────────────────────
+	if p.cfg.CloudRecon.Enabled && len(uniqueSubs) > 0 {
+		p.phase(scanID, "cloud-recon", domain)
+		cloudFindings := p.cloudScanner.ScanCloud(ctx, domain, uniqueSubs, uniqueIPs, scanID)
+		for _, cf := range cloudFindings {
+			p.db.UpsertCloudFinding(struct {
+				FindingType string
+				Domain      string
+				URL         string
+				Provider    string
+				Region      string
+				Service     string
+				Severity    string
+				Detail      string
+				Accessible  bool
+				ScanID      int64
+			}{
+				FindingType: cf.FindingType, Domain: domain, URL: cf.URL,
+				Provider: cf.Provider, Region: cf.Region, Service: cf.Service,
+				Severity: cf.Severity, Detail: cf.Detail, Accessible: cf.Accessible, ScanID: scanID,
+			})
+			if cf.Severity == "critical" || cf.Severity == "high" {
+				p.alertMgr.Send(alerting.AlertEvent{
+					Domain: domain, EventType: "cloud_exposure", Value: cf.URL,
+					Severity: cf.Severity, Title: "Cloud Asset Exposed",
+					Details: map[string]interface{}{
+						"finding_type": cf.FindingType, "provider": cf.Provider,
+						"url": cf.URL, "detail": cf.Detail, "accessible": cf.Accessible,
+					}, ScanID: scanID,
+				})
+			}
+		}
+		if len(cloudFindings) > 0 {
+			p.logger("[2b] %d cloud findings", len(cloudFindings))
+		}
+	}
 
 	// ── Phase 3: HTTP Probing ─────────────────────────────────────
 	p.phase(scanID, "httpx", domain)
@@ -236,6 +333,24 @@ func (p *Processor) RunScan(ctx context.Context, domain, profileName string) (*S
 					"interesting": interesting, "interest_tag": interestTag,
 					"attack_surface": len(asSurface),
 				})
+			p.alertMgr.Send(alerting.AlertEvent{
+				Domain: domain, EventType: "new_host", Value: hr.URL,
+				Severity: sev, Title: "New Host",
+				Details: map[string]interface{}{
+					"url": hr.URL, "status_code": hr.StatusCode, "title": hr.Title,
+					"server": hr.Server, "ip": resolvedIP, "interesting": interesting,
+				}, ScanID: scanID,
+			})
+		}
+		if isNew && interesting {
+			p.alertMgr.Send(alerting.AlertEvent{
+				Domain: domain, EventType: "interesting_host", Value: hr.URL,
+				Severity: "high", Title: "Interesting Target",
+				Details: map[string]interface{}{
+					"url": hr.URL, "tag": interestTag, "status_code": hr.StatusCode,
+					"title": hr.Title, "ip": resolvedIP,
+				}, ScanID: scanID,
+			})
 		}
 
 		// Store fingerprints
@@ -249,11 +364,68 @@ func (p *Processor) RunScan(ctx context.Context, domain, profileName string) (*S
 				})
 			}
 		}
+		// Check for new technologies
+		for _, tech := range hr.Technologies {
+			name, ver := parseTech(tech)
+			if name != "" {
+				isNewTech := !strings.Contains(strings.ToLower(string(techJSON)), strings.ToLower(name))
+				if isNewTech {
+					cat := categorizeTech(name)
+					p.alertMgr.Send(alerting.AlertEvent{
+						Domain: domain, EventType: "new_technology", Value: name + "@" + hr.URL,
+						Severity: "info", Title: "Technology Detected",
+						Details: map[string]interface{}{
+							"url": hr.URL, "tech": name, "version": ver,
+							"category": cat, "action": getTechAction(name),
+						}, ScanID: scanID,
+					})
+				}
+			}
+		}
 	}
 	p.logger("[3] %d live hosts", result.Stats.HostsFound)
 
+	// ── Phase 3b: Tech Checks ──────────────────────────────────
+	if p.cfg.TechChecks.Enabled && len(liveHosts) > 0 {
+		p.phase(scanID, "tech-checks", domain)
+		techFindings := p.techRunner.RunChecks(ctx, liveHosts, scanID)
+		for _, tf := range techFindings {
+			p.db.UpsertTechFinding(struct {
+				Domain     string
+				HostURL    string
+				HostID     int64
+				AssetID    int64
+				Technology string
+				CheckName  string
+				URL        string
+				Result     string
+				Severity   string
+				Detail     string
+				Confirmed  bool
+				ScanID     int64
+			}{
+				Domain: domain, HostURL: tf.HostURL, HostID: tf.HostID,
+				AssetID: tf.AssetID, Technology: tf.Technology, CheckName: tf.CheckName,
+				URL: tf.URL, Result: tf.Result, Severity: tf.Severity,
+				Detail: tf.Detail, Confirmed: tf.Confirmed, ScanID: scanID,
+			})
+			if tf.Severity == "critical" || tf.Severity == "high" {
+				p.alertMgr.Send(alerting.AlertEvent{
+					Domain: domain, EventType: "new_technology", Value: tf.CheckName + "@" + tf.HostURL,
+					Severity: tf.Severity, Title: "Tech Check Finding",
+					Details: map[string]interface{}{
+						"url": tf.URL, "tech": tf.Technology, "check": tf.CheckName,
+						"result": tf.Result, "detail": tf.Detail, "confirmed": tf.Confirmed,
+					}, ScanID: scanID,
+				})
+			}
+		}
+		if len(techFindings) > 0 {
+			p.logger("[3b] %d tech check findings", len(techFindings))
+		}
+	}
+
 	// ── Phase 4: Port Scanning ────────────────────────────────────
-	uniqueIPs := uniqueValues(ipMap)
 
 	// Net expansion (aggressive profile)
 	if profile.NetExpand && p.cfg.Scanning.NetExpand.Enabled && len(uniqueIPs) > 0 {
@@ -353,6 +525,16 @@ func (p *Processor) RunScan(ctx context.Context, domain, profileName string) (*S
 					"service": svc.name, "version": ver, "risk": svc.risk,
 					"banner": truncate(bannerStr, 100),
 				})
+			if svc.risk == "high" {
+				p.alertMgr.Send(alerting.AlertEvent{
+					Domain: domain, EventType: "high_risk_port", Value: fmt.Sprintf("%s:%d", ip, nr.Port),
+					Severity: "high", Title: "High Risk Port",
+					Details: map[string]interface{}{
+						"ip": ip, "port": nr.Port, "service": svc.name,
+						"version": ver, "banner": truncate(bannerStr, 100),
+					}, ScanID: scanID,
+				})
+			}
 		}
 	}
 	p.logger("[4] %d open ports", result.Stats.PortsFound)
@@ -424,6 +606,14 @@ func (p *Processor) RunScan(ctx context.Context, domain, profileName string) (*S
 							"js_url": jf.JSURL, "type": jf.FindingType,
 							"value": truncate(jf.Value, 200), "severity": jf.Severity,
 						})
+					p.alertMgr.Send(alerting.AlertEvent{
+						Domain: domain, EventType: "js_secret", Value: jf.FindingType + "@" + jf.JSURL,
+						Severity: jf.Severity, Title: "Secret Detected",
+						Details: map[string]interface{}{
+							"js_url": jf.JSURL, "type": jf.FindingType,
+							"value": truncate(jf.Value, 60), "severity": jf.Severity,
+						}, ScanID: scanID,
+					})
 				}
 			}(jf)
 		}
@@ -432,6 +622,11 @@ func (p *Processor) RunScan(ctx context.Context, domain, profileName string) (*S
 	}
 
 	// ── Finalise ──────────────────────────────────────────────────
+	// Flush batched alerts for this domain
+	if p.cfg.Alerting.Telegram.Enabled {
+		p.alertMgr.Flush(domain)
+	}
+
 	result.Stats.Duration = int64(time.Since(start).Seconds())
 	p.db.CompleteScan(scanID, result.Stats)
 
@@ -770,4 +965,27 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max]
+}
+
+func getTechAction(tech string) string {
+	actions := map[string]string{
+		"jenkins":       "Check /script console for unauth RCE",
+		"grafana":       "Check /api/datasources for unauth access",
+		"gitlab":        "Check /api/v4/projects for public repos",
+		"wordpress":     "Check /wp-login.php and /wp-json/wp/v2/users",
+		"laravel":       "Check /.env for APP_KEY exposure",
+		"django":        "Check /__debug__/ for debug toolbar",
+		"kubernetes":    "Check /api/v1/namespaces for unauth access",
+		"elasticsearch": "Check /_cat/indices for unauth data",
+		"docker":        "Check /containers/json for unauth access",
+		"redis":         "Check for unauthenticated access",
+		"mongodb":       "Check for unauthenticated access",
+	}
+	lower := strings.ToLower(tech)
+	for k, v := range actions {
+		if strings.Contains(lower, k) {
+			return v
+		}
+	}
+	return "Review for potential exposure"
 }

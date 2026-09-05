@@ -1,0 +1,75 @@
+{{define "content"}}
+<style>
+  .alert-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .alert-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .alert-card .count { font-size: 28px; font-weight: 700; color: var(--accent); }
+  .alert-card .label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .event-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .event-new_subdomain { background: #44ff4420; color: #44ff44; }
+  .event-high_risk_port { background: #ff444420; color: #ff4444; }
+  .event-js_secret { background: #ff880020; color: #ff8800; }
+  .event-interesting_host { background: #4488ff20; color: #4488ff; }
+  .event-host_down { background: #6c757d20; color: #adb5bd; }
+  .event-new_technology { background: #aa44ff20; color: #aa44ff; }
+  .event-cloud_exposure { background: #ff008820; color: #ff0088; }
+  .event-other { background: #6c757d20; color: #adb5bd; }
+  .sent-yes { color: #44ff44; }
+  .sent-no { color: #ff4444; }
+  .filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .filter-bar select, .filter-bar input { background: var(--bg2); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 4px; font-size: 13px; }
+  .no-data { text-align: center; color: var(--muted); padding: 40px 0; }
+  .msg-cell { font-family: monospace; font-size: 12px; word-break: break-word; max-width: 400px; }
+</style>
+
+<div class="alert-grid">
+  <div class="alert-card"><div class="count" id="total-alerts">-</div><div class="label">Total Alerts</div></div>
+  <div class="alert-card"><div class="count" id="sent-alerts" style="color:#44ff44">-</div><div class="label">Sent</div></div>
+  <div class="alert-card"><div class="count" id="failed-alerts" style="color:#ff4444">-</div><div class="label">Failed</div></div>
+  <div class="alert-card"><div class="count" id="today-alerts" style="color:#4488ff">-</div><div class="label">Today</div></div>
+</div>
+
+<div class="card">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Domain</th>
+        <th>Event Type</th>
+        <th>Message</th>
+        <th>Sent</th>
+      </tr>
+    </thead>
+    <tbody id="al-tbody"></tbody>
+  </table>
+</div>
+
+<script>
+async function loadAlerts() {
+  try {
+    const items = await apiFetch('/api/alerts');
+    const list = Array.isArray(items) ? items : [];
+    document.getElementById('total-alerts').textContent = list.length;
+    document.getElementById('sent-alerts').textContent = list.filter(i => i.success).length;
+    document.getElementById('failed-alerts').textContent = list.filter(i => !i.success).length;
+    const today = new Date().toDateString();
+    document.getElementById('today-alerts').textContent = list.filter(i => new Date(i.sent_at).toDateString() === today).length;
+
+    const tbody = document.getElementById('al-tbody');
+    if (!list.length) { tbody.innerHTML = '<tr><td colspan="5" class="no-data">No alerts sent yet</td></tr>'; return; }
+    tbody.innerHTML = list.map(i => {
+      const evtCls = 'event-' + (i.event_type || 'other');
+      return `<tr>
+        <td>${fmtDate(i.sent_at)}</td>
+        <td>${esc(i.domain)}</td>
+        <td><span class="event-badge ${evtCls}">${esc(i.event_type)}</span></td>
+        <td class="msg-cell">${esc(i.message)}</td>
+        <td class="${i.success ? 'sent-yes' : 'sent-no'}">${i.success ? '&#x2714; OK' : '&#x2718; FAIL'}</td>
+      </tr>`;
+    }).join('');
+  } catch(e) { console.error('alerts error', e); }
+}
+loadAlerts();
+</script>
+{{end}}
+
+{{define "scripts"}}{{end}}

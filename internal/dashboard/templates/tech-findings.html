@@ -1,0 +1,105 @@
+{{define "content"}}
+<style>
+  .tech-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .tech-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .tech-card .count { font-size: 28px; font-weight: 700; color: var(--accent); }
+  .tech-card .label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .severity-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+  .sev-critical { background: #ff444420; color: #ff4444; }
+  .sev-high { background: #ff880020; color: #ff8800; }
+  .sev-medium { background: #ffcc0020; color: #ffcc00; }
+  .sev-low { background: #4488ff20; color: #4488ff; }
+  .sev-info { background: #6c757d20; color: #adb5bd; }
+  .tech-name { font-weight: 600; color: var(--accent); }
+  .finding-url { font-family: monospace; font-size: 12px; word-break: break-all; color: var(--text); }
+  .filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .filter-bar select, .filter-bar input { background: var(--bg2); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 4px; font-size: 13px; }
+  .no-data { text-align: center; color: var(--muted); padding: 40px 0; }
+</style>
+
+<div class="tech-grid">
+  <div class="tech-card"><div class="count" id="total-tech">-</div><div class="label">Total Findings</div></div>
+  <div class="tech-card"><div class="count" id="critical-tech" style="color:#ff4444">-</div><div class="label">Critical</div></div>
+  <div class="tech-card"><div class="count" id="high-tech" style="color:#ff8800">-</div><div class="label">High</div></div>
+  <div class="tech-card"><div class="count" id="confirmed-tech" style="color:#44ff44">-</div><div class="label">Confirmed</div></div>
+</div>
+
+<div class="filter-bar">
+  <select id="tf-tech" onchange="loadTechFindings()">
+    <option value="">All Technologies</option>
+    <option value="WordPress">WordPress</option>
+    <option value="Laravel">Laravel</option>
+    <option value="Django">Django</option>
+    <option value="Next.js">Next.js</option>
+    <option value="Jenkins">Jenkins</option>
+    <option value="GitLab">GitLab</option>
+    <option value="Grafana">Grafana</option>
+    <option value="Kubernetes">Kubernetes</option>
+    <option value="Elasticsearch">Elasticsearch</option>
+    <option value="Docker">Docker</option>
+  </select>
+  <select id="tf-severity" onchange="loadTechFindings()">
+    <option value="">All Severities</option>
+    <option value="critical">Critical</option>
+    <option value="high">High</option>
+    <option value="medium">Medium</option>
+    <option value="low">Low</option>
+    <option value="info">Info</option>
+  </select>
+  <input id="tf-search" placeholder="Search findings..." oninput="loadTechFindings()">
+</div>
+
+<div class="card">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Technology</th>
+        <th>Check</th>
+        <th>URL</th>
+        <th>Result</th>
+        <th>Severity</th>
+        <th>Detail</th>
+        <th>Confirmed</th>
+        <th>First Seen</th>
+        <th>Last Seen</th>
+      </tr>
+    </thead>
+    <tbody id="tf-tbody"></tbody>
+  </table>
+</div>
+
+<script>
+async function loadTechFindings() {
+  try {
+    const data = await apiFetch('/api/tech-findings?tech=' + (document.getElementById('tf-tech').value || '') + '&severity=' + (document.getElementById('tf-severity').value || ''));
+    const items = data.data || [];
+    const total = data.total || items.length;
+    document.getElementById('total-tech').textContent = total;
+    document.getElementById('critical-tech').textContent = items.filter(i => i.severity === 'critical').length;
+    document.getElementById('high-tech').textContent = items.filter(i => i.severity === 'high').length;
+    document.getElementById('confirmed-tech').textContent = items.filter(i => i.confirmed).length;
+
+    const tbody = document.getElementById('tf-tbody');
+    if (!items.length) { tbody.innerHTML = '<tr><td colspan="9" class="no-data">No tech findings yet</td></tr>'; return; }
+    const search = (document.getElementById('tf-search').value || '').toLowerCase();
+    const filtered = search ? items.filter(i => (i.technology||'').toLowerCase().includes(search) || (i.check_name||'').toLowerCase().includes(search) || (i.detail||'').toLowerCase().includes(search)) : items;
+    tbody.innerHTML = filtered.map(i => `
+      <tr>
+        <td><span class="tech-name">${esc(i.technology)}</span></td>
+        <td>${esc(i.check_name)}</td>
+        <td class="finding-url">${esc(i.url)}</td>
+        <td>${esc(i.result)}</td>
+        <td><span class="severity-badge sev-${esc(i.severity)}">${esc(i.severity)}</span></td>
+        <td>${esc(i.detail)}</td>
+        <td>${i.confirmed ? '<span style="color:#44ff44">&#x2714;</span>' : '<span style="color:#666">&#x2718;</span>'}</td>
+        <td>${fmtDate(i.first_seen)}</td>
+        <td>${fmtDate(i.last_seen)}</td>
+      </tr>
+    `).join('');
+  } catch(e) { console.error('tech findings error', e); }
+}
+loadTechFindings();
+</script>
+{{end}}
+
+{{define "scripts"}}{{end}}

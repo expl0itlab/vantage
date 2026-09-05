@@ -8,14 +8,16 @@ import (
 )
 
 type Config struct {
-	Database  DatabaseConfig  `yaml:"database"`
-	Discovery DiscoveryConfig `yaml:"discovery"`
-	Scanning  ScanningConfig  `yaml:"scanning"`
-	Dashboard DashboardConfig `yaml:"dashboard"`
-	Scheduler SchedulerConfig `yaml:"scheduler"`
-	Telegram  TelegramConfig  `yaml:"telegram"`
-	Targets   []TargetConfig  `yaml:"targets"`
-	Tools     ToolsConfig     `yaml:"tools"`
+	Database   DatabaseConfig   `yaml:"database"`
+	Discovery  DiscoveryConfig  `yaml:"discovery"`
+	Scanning   ScanningConfig   `yaml:"scanning"`
+	Dashboard  DashboardConfig  `yaml:"dashboard"`
+	Scheduler  SchedulerConfig  `yaml:"scheduler"`
+	Alerting   AlertingConfig   `yaml:"alerting"`
+	TechChecks TechChecksConfig `yaml:"tech_checks"`
+	CloudRecon CloudReconConfig `yaml:"cloud_recon"`
+	Targets    []TargetConfig   `yaml:"targets"`
+	Tools      ToolsConfig      `yaml:"tools"`
 	// Active profile override (set via CLI flag)
 	ActiveProfile string `yaml:"-"`
 }
@@ -124,11 +126,37 @@ type SchedulerConfig struct {
 	Schedule string `yaml:"schedule"`
 }
 
+type AlertingConfig struct {
+	Telegram    TelegramConfig `yaml:"telegram"`
+	MinSeverity string         `yaml:"min_severity"`
+	NewOnly     bool           `yaml:"new_only"`
+	AlertOn     AlertOnConfig  `yaml:"alert_on"`
+}
+
 type TelegramConfig struct {
-	Enabled     bool   `yaml:"enabled"`
-	BotToken    string `yaml:"bot_token"`
-	ChatID      string `yaml:"chat_id"`
-	MinSeverity string `yaml:"min_severity"` // critical, high, medium, low, info
+	Enabled  bool   `yaml:"enabled"`
+	BotToken string `yaml:"bot_token"`
+	ChatID   string `yaml:"chat_id"`
+}
+
+type AlertOnConfig struct {
+	NewSubdomain    bool `yaml:"new_subdomain"`
+	HighRiskPort    bool `yaml:"high_risk_port"`
+	JSSecret        bool `yaml:"js_secret"`
+	InterestingHost bool `yaml:"interesting_host"`
+	HostDown        bool `yaml:"host_down"`
+	NewTechnology   bool `yaml:"new_technology"`
+}
+
+type TechChecksConfig struct {
+	Enabled bool `yaml:"enabled"`
+	Threads int  `yaml:"threads"`
+	Timeout int  `yaml:"timeout"`
+}
+
+type CloudReconConfig struct {
+	Enabled bool `yaml:"enabled"`
+	Timeout int  `yaml:"timeout"`
 }
 
 type TargetConfig struct {
@@ -312,6 +340,33 @@ func (c *Config) applyDefaults() {
 	if c.Scheduler.Schedule == "" {
 		c.Scheduler.Schedule = "0 0 2 * * *"
 	}
+
+	// Alerting defaults
+	if c.Alerting.MinSeverity == "" {
+		c.Alerting.MinSeverity = "high"
+	}
+	c.Alerting.NewOnly = true
+	c.Alerting.AlertOn.NewSubdomain = true
+	c.Alerting.AlertOn.HighRiskPort = true
+	c.Alerting.AlertOn.JSSecret = true
+	c.Alerting.AlertOn.InterestingHost = true
+	c.Alerting.AlertOn.HostDown = false
+	c.Alerting.AlertOn.NewTechnology = true
+
+	// Tech checks defaults
+	if c.TechChecks.Threads == 0 {
+		c.TechChecks.Threads = 10
+	}
+	if c.TechChecks.Timeout == 0 {
+		c.TechChecks.Timeout = 8
+	}
+	c.TechChecks.Enabled = true
+
+	// Cloud recon defaults
+	if c.CloudRecon.Timeout == 0 {
+		c.CloudRecon.Timeout = 8
+	}
+	c.CloudRecon.Enabled = true
 }
 
 // GetProfile returns the active profile override

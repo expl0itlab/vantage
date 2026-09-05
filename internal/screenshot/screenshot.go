@@ -81,14 +81,13 @@ func (e *Engine) CaptureAll(ctx context.Context, urls []string) []Result {
 	scanCtx, cancel := context.WithTimeout(ctx, time.Duration(len(urls)*e.timeout+60)*time.Second)
 	defer cancel()
 
-	// gowitness v3 syntax: scan file -f urls.txt -s ./screenshots --threads 4
 	args := []string{
 		"scan", "file",
 		"-f", tmpFile.Name(),
 		"-s", e.outputDir,
-		"--threads", fmt.Sprintf("%d", e.threads),
-		"--timeout", fmt.Sprintf("%d", e.timeout),
-		"--no-db",
+		"-t", fmt.Sprintf("%d", e.threads),
+		"-T", fmt.Sprintf("%d", e.timeout),
+		"--write-none",
 	}
 
 	cmd := exec.CommandContext(scanCtx, e.goWitnessPath, args...)
@@ -107,11 +106,11 @@ func (e *Engine) collectResults(urls []string) []Result {
 	var results []Result
 
 	for _, u := range urls {
-		// gowitness names files after the URL (sanitized)
 		filename := urlToFilename(u)
 		candidates := []string{
 			filepath.Join(e.outputDir, filename+".png"),
 			filepath.Join(e.outputDir, filename+".jpg"),
+			filepath.Join(e.outputDir, filename+".jpeg"),
 		}
 
 		for _, path := range candidates {
@@ -141,7 +140,7 @@ func (e *Engine) collectResults(urls []string) []Result {
 			continue
 		}
 		name := entry.Name()
-		if !strings.HasSuffix(name, ".png") && !strings.HasSuffix(name, ".jpg") {
+		if !strings.HasSuffix(name, ".png") && !strings.HasSuffix(name, ".jpg") && !strings.HasSuffix(name, ".jpeg") {
 			continue
 		}
 		fullPath := filepath.Join(e.outputDir, name)
@@ -164,7 +163,7 @@ func (e *Engine) ListScreenshots() []string {
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			name := entry.Name()
-			if strings.HasSuffix(name, ".png") || strings.HasSuffix(name, ".jpg") {
+			if strings.HasSuffix(name, ".png") || strings.HasSuffix(name, ".jpg") || strings.HasSuffix(name, ".jpeg") {
 				files = append(files, filepath.Join(e.outputDir, name))
 			}
 		}

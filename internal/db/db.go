@@ -152,6 +152,60 @@ CREATE TABLE IF NOT EXISTS fingerprints (
 );
 CREATE INDEX IF NOT EXISTS idx_fp_asset ON fingerprints(asset_id);
 CREATE INDEX IF NOT EXISTS idx_fp_tech ON fingerprints(technology);
+
+CREATE TABLE IF NOT EXISTS alert_history (
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	domain      TEXT NOT NULL,
+	event_type  TEXT NOT NULL,
+	message     TEXT NOT NULL,
+	success     INTEGER DEFAULT 0,
+	sent_at     DATETIME NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_alert_domain ON alert_history(domain);
+CREATE INDEX IF NOT EXISTS idx_alert_sent ON alert_history(sent_at);
+
+CREATE TABLE IF NOT EXISTS tech_findings (
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	domain      TEXT NOT NULL,
+	host_url    TEXT NOT NULL,
+	host_id     INTEGER DEFAULT 0,
+	asset_id    INTEGER DEFAULT 0,
+	technology  TEXT NOT NULL,
+	check_name  TEXT NOT NULL,
+	url         TEXT NOT NULL,
+	result      TEXT DEFAULT '',
+	severity    TEXT NOT NULL DEFAULT 'info',
+	detail      TEXT DEFAULT '',
+	confirmed   INTEGER DEFAULT 0,
+	first_seen  DATETIME NOT NULL,
+	last_seen   DATETIME NOT NULL,
+	scan_id     INTEGER,
+	UNIQUE(domain, host_url, technology, check_name)
+);
+CREATE INDEX IF NOT EXISTS idx_tech_domain ON tech_findings(domain);
+CREATE INDEX IF NOT EXISTS idx_tech_severity ON tech_findings(severity);
+CREATE INDEX IF NOT EXISTS idx_tech_confirmed ON tech_findings(confirmed);
+
+CREATE TABLE IF NOT EXISTS cloud_findings (
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
+	domain       TEXT NOT NULL,
+	scan_id      INTEGER,
+	finding_type TEXT NOT NULL,
+	url          TEXT NOT NULL,
+	provider     TEXT DEFAULT '',
+	region       TEXT DEFAULT '',
+	service      TEXT DEFAULT '',
+	severity     TEXT NOT NULL DEFAULT 'info',
+	detail       TEXT DEFAULT '',
+	accessible   INTEGER DEFAULT 0,
+	first_seen   DATETIME NOT NULL,
+	last_seen    DATETIME NOT NULL,
+	UNIQUE(domain, finding_type, url)
+);
+CREATE INDEX IF NOT EXISTS idx_cloud_domain ON cloud_findings(domain);
+CREATE INDEX IF NOT EXISTS idx_cloud_provider ON cloud_findings(provider);
+CREATE INDEX IF NOT EXISTS idx_cloud_severity ON cloud_findings(severity);
+CREATE INDEX IF NOT EXISTS idx_cloud_type ON cloud_findings(finding_type);
 `
 
 type DB struct {
@@ -193,6 +247,9 @@ func (d *DB) migrate() error {
 		{"hosts", "attack_surface", "TEXT DEFAULT '[]'"},
 		{"ports", "risk_level", "TEXT DEFAULT 'low'"},
 		{"ports", "interesting", "INTEGER DEFAULT 0"},
+		{"js_findings", "entropy_score", "REAL DEFAULT 0"},
+		{"js_findings", "variable_name", "TEXT DEFAULT ''"},
+		{"js_findings", "context_lines", "TEXT DEFAULT ''"},
 	}
 	for _, m := range cols {
 		var dummy string
@@ -752,6 +809,241 @@ func (d *DB) GetDashboardStats() (*models.DashboardStats, error) {
 		s.LastScanTime = &lastScan
 	}
 	return s, nil
+}
+
+// ──────────────────────────── ALERT HISTORY ────────────────────────────
+
+func (d *DB) HasAlerted(domain, eventType, value string) (bool, error) {
+	var count int
+	err := d.db.QueryRow(`SELECT COUNT(*) FROM alert_history WHERE domain=? AND event_type=? AND message LIKE ?`,
+		domain, eventType, "%"+value+"%").Scan(&count)
+	return count > 0, err
+}
+
+func (d *DB) RecordAlert(domain, eventType, message string, success bool) error {
+	succ := 0
+	if success {
+		succ = 1
+	}
+	_, err := d.db.Exec(`INSERT INTO alert_history (domain, event_type, message, success, sent_at) VALUES (?, ?, ?, ?, ?)`,
+		domain, eventType, message, succ, time.Now())
+	return err
+}
+
+func (d *DB) GetAlertHistory(domain string, limit int) ([]map[string]interface{}, error) {
+	where, args := "1=1", []interface{}{}
+	if domain != "" {
+		where += " AND domain=?"
+		args = append(args, domain)
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := d.db.Query(fmt.Sprintf(
+		`SELECT id, domain, event_type, message, success, sent_at FROM alert_history WHERE %s ORDER BY sent_at DESC LIMIT ?`, where),
+		append(args, limit)...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []map[string]interface{}
+	for rows.Next() {
+		var id int64
+		var dom, evt, msg string
+		var success int
+		var sentAt time.Time
+		if err := rows.Scan(&id, &dom, &evt, &msg, &success, &sentAt); err != nil {
+			return nil, err
+		}
+		out = append(out, map[string]interface{}{
+			"id": id, "domain": dom, "event_type": evt,
+			"message": msg, "success": success == 1, "sent_at": sentAt,
+		})
+	}
+	return out, rows.Err()
+}
+
+// ──────────────────────────── TECH FINDINGS ────────────────────────────
+
+func (d *DB) UpsertTechFinding(f struct {
+	Domain     string
+	HostURL    string
+	HostID     int64
+	AssetID    int64
+	Technology string
+	CheckName  string
+	URL        string
+	Result     string
+	Severity   string
+	Detail     string
+	Confirmed  bool
+	ScanID     int64
+}) (int64, bool, error) {
+	var existingID int64
+	err := d.db.QueryRow(`SELECT id FROM tech_findings WHERE domain=? AND host_url=? AND technology=? AND check_name=?`,
+		f.Domain, f.HostURL, f.Technology, f.CheckName).Scan(&existingID)
+
+	if err == sql.ErrNoRows {
+		res, err := d.db.Exec(
+			`INSERT INTO tech_findings (domain, host_url, host_id, asset_id, technology, check_name,
+			url, result, severity, detail, confirmed, first_seen, last_seen, scan_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			f.Domain, f.HostURL, f.HostID, f.AssetID, f.Technology, f.CheckName,
+			f.URL, f.Result, f.Severity, f.Detail, boolInt(f.Confirmed), time.Now(), time.Now(), f.ScanID,
+		)
+		if err != nil {
+			return 0, false, err
+		}
+		id, _ := res.LastInsertId()
+		return id, true, nil
+	} else if err != nil {
+		return 0, false, err
+	}
+	_, err = d.db.Exec(`UPDATE tech_findings SET result=?, severity=?, detail=?, confirmed=?, last_seen=?, scan_id=? WHERE id=?`,
+		f.Result, f.Severity, f.Detail, boolInt(f.Confirmed), time.Now(), f.ScanID, existingID)
+	return existingID, false, err
+}
+
+func (d *DB) GetTechFindings(domain, tech, severity string, limit int) ([]map[string]interface{}, int, error) {
+	where, args := "1=1", []interface{}{}
+	if domain != "" {
+		where += " AND domain=?"
+		args = append(args, domain)
+	}
+	if tech != "" {
+		where += " AND technology=?"
+		args = append(args, tech)
+	}
+	if severity != "" {
+		where += " AND severity=?"
+		args = append(args, severity)
+	}
+	var total int
+	d.db.QueryRow("SELECT COUNT(*) FROM tech_findings WHERE "+where, args...).Scan(&total)
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := d.db.Query(fmt.Sprintf(
+		`SELECT id, domain, host_url, host_id, asset_id, technology, check_name, url,
+		result, severity, detail, confirmed, first_seen, last_seen, scan_id
+		FROM tech_findings WHERE %s ORDER BY
+		CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
+		last_seen DESC LIMIT ?`, where),
+		append(args, limit)...,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []map[string]interface{}
+	for rows.Next() {
+		var id, hostID, assetID, scanID int64
+		var dom, hostURL, tech2, checkName, url, result, sev, detail string
+		var confirmed int
+		var firstSeen, lastSeen time.Time
+		if err := rows.Scan(&id, &dom, &hostURL, &hostID, &assetID, &tech2, &checkName, &url,
+			&result, &sev, &detail, &confirmed, &firstSeen, &lastSeen, &scanID); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, map[string]interface{}{
+			"id": id, "domain": dom, "host_url": hostURL, "host_id": hostID,
+			"asset_id": assetID, "technology": tech2, "check_name": checkName,
+			"url": url, "result": result, "severity": sev, "detail": detail,
+			"confirmed": confirmed == 1, "first_seen": firstSeen, "last_seen": lastSeen, "scan_id": scanID,
+		})
+	}
+	return out, total, rows.Err()
+}
+
+// ──────────────────────────── CLOUD FINDINGS ────────────────────────────
+
+func (d *DB) UpsertCloudFinding(f struct {
+	FindingType string
+	Domain      string
+	URL         string
+	Provider    string
+	Region      string
+	Service     string
+	Severity    string
+	Detail      string
+	Accessible  bool
+	ScanID      int64
+}) (int64, bool, error) {
+	var existingID int64
+	err := d.db.QueryRow(`SELECT id FROM cloud_findings WHERE domain=? AND finding_type=? AND url=?`,
+		f.Domain, f.FindingType, f.URL).Scan(&existingID)
+
+	if err == sql.ErrNoRows {
+		res, err := d.db.Exec(
+			`INSERT INTO cloud_findings (domain, scan_id, finding_type, url, provider, region, service,
+			severity, detail, accessible, first_seen, last_seen)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			f.Domain, f.ScanID, f.FindingType, f.URL, f.Provider, f.Region, f.Service,
+			f.Severity, f.Detail, boolInt(f.Accessible), time.Now(), time.Now(),
+		)
+		if err != nil {
+			return 0, false, err
+		}
+		id, _ := res.LastInsertId()
+		return id, true, nil
+	} else if err != nil {
+		return 0, false, err
+	}
+	_, err = d.db.Exec(`UPDATE cloud_findings SET severity=?, detail=?, accessible=?, last_seen=?, scan_id=? WHERE id=?`,
+		f.Severity, f.Detail, boolInt(f.Accessible), time.Now(), f.ScanID, existingID)
+	return existingID, false, err
+}
+
+func (d *DB) GetCloudFindings(domain, provider, severity string, limit int) ([]map[string]interface{}, int, error) {
+	where, args := "1=1", []interface{}{}
+	if domain != "" {
+		where += " AND domain=?"
+		args = append(args, domain)
+	}
+	if provider != "" {
+		where += " AND provider=?"
+		args = append(args, provider)
+	}
+	if severity != "" {
+		where += " AND severity=?"
+		args = append(args, severity)
+	}
+	var total int
+	d.db.QueryRow("SELECT COUNT(*) FROM cloud_findings WHERE "+where, args...).Scan(&total)
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := d.db.Query(fmt.Sprintf(
+		`SELECT id, domain, scan_id, finding_type, url, provider, region, service,
+		severity, detail, accessible, first_seen, last_seen
+		FROM cloud_findings WHERE %s ORDER BY
+		CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
+		last_seen DESC LIMIT ?`, where),
+		append(args, limit)...,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []map[string]interface{}
+	for rows.Next() {
+		var id, scanID int64
+		var dom, ftype, url, prov, reg, svc, sev, detail string
+		var accessible int
+		var firstSeen, lastSeen time.Time
+		if err := rows.Scan(&id, &dom, &scanID, &ftype, &url, &prov, &reg, &svc,
+			&sev, &detail, &accessible, &firstSeen, &lastSeen); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, map[string]interface{}{
+			"id": id, "domain": dom, "scan_id": scanID, "finding_type": ftype,
+			"url": url, "provider": prov, "region": reg, "service": svc,
+			"severity": sev, "detail": detail, "accessible": accessible == 1,
+			"first_seen": firstSeen, "last_seen": lastSeen,
+		})
+	}
+	return out, total, rows.Err()
 }
 
 // ──────────────────────────── WIPE ────────────────────────────

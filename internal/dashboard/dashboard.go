@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -107,6 +108,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/changes", s.page("changes"))
 	s.mux.HandleFunc("/scans", s.page("scans"))
 	s.mux.HandleFunc("/attack-surface", s.page("attack-surface"))
+	s.mux.HandleFunc("/tech-findings", s.page("tech-findings"))
+	s.mux.HandleFunc("/cloud-assets", s.page("cloud-assets"))
+	s.mux.HandleFunc("/alerts", s.page("alerts"))
 
 	// Screenshots static
 	screenshotDir := s.cfg.Scanning.Screenshot.OutputDir
@@ -126,6 +130,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/scan/start", s.apiStartScan)
 	s.mux.HandleFunc("/api/domains", s.apiDomains)
 	s.mux.HandleFunc("/api/wipe", s.apiWipe)
+	s.mux.HandleFunc("/api/tech-findings", s.apiTechFindings)
+	s.mux.HandleFunc("/api/cloud-findings", s.apiCloudFindings)
+	s.mux.HandleFunc("/api/alerts", s.apiAlerts)
 
 	// Exports
 	s.mux.HandleFunc("/api/export/json", s.apiExportJSON)
@@ -152,6 +159,8 @@ func (s *Server) page(name string) http.HandlerFunc {
 			"ports": "Ports & Services", "js-findings": "JS Analysis",
 			"interesting": "Interesting Targets", "changes": "Change Tracking",
 			"scans": "Scan History", "attack-surface": "Attack Surface",
+			"tech-findings": "Tech Check Findings", "cloud-assets": "Cloud Assets",
+			"alerts": "Alert History",
 		}
 		s.renderPage(w, name, map[string]interface{}{
 			"Title": titles[name],
@@ -370,6 +379,46 @@ func (s *Server) apiWipe(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "ok", "message": msg})
 }
 
+// ──────────────────────────── NEW API HANDLERS ────────────────────────────
+
+func (s *Server) apiTechFindings(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	findings, total, err := s.db.GetTechFindings(q.Get("domain"), q.Get("tech"), q.Get("severity"), intQ(q.Get("limit"), 100))
+	if err != nil {
+		jsonError(w, err, 500)
+		return
+	}
+	if findings == nil {
+		findings = []map[string]interface{}{}
+	}
+	jsonPage(w, findings, total, intQ(q.Get("page"), 1), intQ(q.Get("limit"), 100))
+}
+
+func (s *Server) apiCloudFindings(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	findings, total, err := s.db.GetCloudFindings(q.Get("domain"), q.Get("provider"), q.Get("severity"), intQ(q.Get("limit"), 100))
+	if err != nil {
+		jsonError(w, err, 500)
+		return
+	}
+	if findings == nil {
+		findings = []map[string]interface{}{}
+	}
+	jsonPage(w, findings, total, intQ(q.Get("page"), 1), intQ(q.Get("limit"), 100))
+}
+
+func (s *Server) apiAlerts(w http.ResponseWriter, r *http.Request) {
+	alerts, err := s.db.GetAlertHistory(r.URL.Query().Get("domain"), intQ(r.URL.Query().Get("limit"), 100))
+	if err != nil {
+		jsonError(w, err, 500)
+		return
+	}
+	if alerts == nil {
+		alerts = []map[string]interface{}{}
+	}
+	jsonOK(w, alerts)
+}
+
 // ──────────────────────────── EXPORTS ────────────────────────────
 
 func (s *Server) apiExportJSON(w http.ResponseWriter, r *http.Request) {
@@ -575,6 +624,14 @@ func jsonPage(w http.ResponseWriter, data interface{}, total, page, limit int) {
 	}
 	if pages == 0 {
 		pages = 1
+	}
+	if data == nil {
+		data = []interface{}{}
+	} else {
+		v := reflect.ValueOf(data)
+		if v.Kind() == reflect.Slice && v.IsNil() {
+			data = reflect.MakeSlice(v.Type(), 0, 0).Interface()
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(pageResp{Data: data, Total: total, Page: page, Limit: limit, Pages: pages})

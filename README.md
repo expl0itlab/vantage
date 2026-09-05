@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="vantage.jpg" alt="Vantage" width="600">
+</p>
+
 # Vantage
 
 **Red Team Attack Surface Management Platform**
@@ -20,6 +24,10 @@ Fully local. No paid APIs. No cloud. Built for red teams.
 - **Screenshots** — auto-capture every live host (gowitness v3)
 - **Network expansion** — found IP → scan the /24 for more hosts (aggressive only)
 - **JS analysis** — extract secrets, API keys, endpoints from JavaScript files
+- **Enhanced secrets detection** — 40+ patterns (cloud keys, JWTs, SSH/PGP keys, API tokens), Shannon entropy filtering, context capture
+- **Tech check packs** — WordPress, Laravel, Django, Next.js, Jenkins, GitLab, Grafana, K8s, Elasticsearch, Docker — 11 packs, ~50 checks
+- **Cloud asset discovery** — S3/Azure Blob/GCP Storage bucket detection, cloud IP ranges, K8s endpoints, Docker APIs
+- **Smart alerts** — Telegram notifications with dedup, rate limiting, severity filtering per event type
 - **Change tracking** — every new asset/host/port recorded as a change event
 - **Exports** — Caido scope JSON, Burp Suite XML, Metasploit .rc, CSV, target lists
 - **Dashboard** — dark web UI with SSE live updates
@@ -120,6 +128,9 @@ docker compose up -d
 | **Attack Surface** | Per-host attack notes — what to check and how |
 | **Interesting** | Admin panels, login pages, APIs, dev envs, risky ports |
 | **JS Analysis** | Secrets, API keys, endpoints extracted from JS files |
+| **Tech Checks** | Technology-specific check results — WordPress, Jenkins, Grafana, etc. |
+| **Cloud Assets** | S3/Azure/GCP buckets, K8s endpoints, Docker APIs, cloud IP ranges |
+| **Alerts** | Telegram alert history — what was sent and when |
 | **Changes** | Every new finding across all scans |
 | **Scans** | Full scan history with export |
 
@@ -147,6 +158,12 @@ Copy `vantage.example.yaml` to `vantage.yaml` and edit:
 cp vantage.example.yaml vantage.yaml
 nano vantage.yaml
 ```
+
+Key config sections:
+
+- `alerting` — Telegram bot token/chat ID, min severity, event type toggles (new_subdomain, high_risk_port, js_secret, interesting_host, host_down, new_technology)
+- `tech_checks` — Enable/disable tech check packs, thread count, timeout
+- `cloud_recon` — Enable/disable cloud asset discovery, timeout
 
 See `vantage.example.yaml` for all available options with documentation.
 
