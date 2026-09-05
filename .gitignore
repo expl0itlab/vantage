@@ -1,0 +1,11 @@
+vantage
+vantage.db
+*.db
+*.db-shm
+*.db-wal
+vantage.yaml
+screenshots/
+*.jsonl
+/tmp/vantage-*
+resume.cfg
+.env

@@ -1,0 +1,99 @@
+{{define "content"}}
+<div class="stat-grid" id="jsStats" style="grid-template-columns:repeat(5,1fr);margin-bottom:14px"></div>
+<div class="card">
+  <div class="card-head">
+    <span class="card-title">// javascript analysis</span>
+    <span class="card-count" id="jCount">—</span>
+    <div style="display:flex;gap:5px;margin-left:auto">
+      <select class="fs" id="jDomExp" style="height:26px"><option value="">domain...</option></select>
+      <button class="btn btn-ghost btn-sm" onclick="dlCSV()">CSV</button>
+    </div>
+  </div>
+  <div class="filters">
+    <input class="fi" id="jSearch" placeholder="value, URL, context..." oninput="debounce(load,350)(1)">
+    <select class="fs" id="jType" onchange="load(1)">
+      <option value="">all types</option>
+      <option value="aws-access-key">aws-key</option>
+      <option value="api-key">api-key</option>
+      <option value="secret">secret</option>
+      <option value="hardcoded-password">password</option>
+      <option value="jwt-token">jwt</option>
+      <option value="bearer-token">bearer</option>
+      <option value="github-token">github-token</option>
+      <option value="stripe-key">stripe-key</option>
+      <option value="google-api-key">google-key</option>
+      <option value="db-connection">db-conn</option>
+      <option value="private-key">private-key</option>
+      <option value="s3-bucket">s3-bucket</option>
+      <option value="internal-ip">internal-ip</option>
+      <option value="api-endpoint">api-endpoint</option>
+      <option value="fetch-endpoint">fetch-endpoint</option>
+      <option value="websocket">websocket</option>
+      <option value="sensitive-file">sensitive-file</option>
+    </select>
+    <select class="fs" id="jSev" onchange="load(1)">
+      <option value="">all severity</option>
+      <option value="critical">critical</option>
+      <option value="high">high</option>
+      <option value="medium">medium</option>
+      <option value="low">low</option>
+    </select>
+    <select class="fs" id="jDom" onchange="load(1)"><option value="">all domains</option></select>
+  </div>
+  <div class="tw"><div id="jTable"><div class="loading"><div class="spin"></div></div></div></div>
+  <div id="jPager"></div>
+</div>
+{{end}}
+{{define "scripts"}}
+<script>
+let cp=1;
+const secrets=new Set(['aws-access-key','api-key','secret','hardcoded-password','jwt-token','bearer-token','github-token','stripe-key','google-api-key','private-key','db-connection']);
+function redact(v){if(!v||v.length<=8)return'••••••••';return esc(v.substring(0,5))+'••••••'+esc(v.slice(-3));}
+
+async function loadStats(){
+  let d;try{d=(await api('/api/stats')).data;}catch{return;}
+  let jd;try{jd=await api('/api/js-findings?limit=1000');}catch{return;}
+  const all=jd.data||[];
+  const byType={};all.forEach(f=>{byType[f.finding_type]=(byType[f.finding_type]||0)+1;});
+  const sec=['aws-access-key','api-key','secret','hardcoded-password','jwt-token','bearer-token','github-token','stripe-key','google-api-key','private-key','db-connection'];
+  const secCnt=sec.reduce((a,k)=>a+(byType[k]||0),0);
+  document.getElementById('jsStats').innerHTML=[
+    {l:'TOTAL',v:d.js_findings||0},{l:'SECRETS/KEYS',v:secCnt},
+    {l:'ENDPOINTS',v:(byType['api-endpoint']||0)+(byType['fetch-endpoint']||0)},
+    {l:'SENSITIVE FILES',v:byType['sensitive-file']||0},
+    {l:'INFRA LEAKS',v:(byType['internal-ip']||0)+(byType['s3-bucket']||0)+(byType['db-connection']||0)},
+  ].map(c=>'<div class="stat-card"><div class="stat-label">'+c.l+'</div><div class="stat-val">'+(c.v||0)+'</div></div>').join('');
+}
+
+async function load(p){
+  if(p)cp=p;
+  const q=new URLSearchParams({search:document.getElementById('jSearch').value,type:document.getElementById('jType').value,severity:document.getElementById('jSev').value,domain:document.getElementById('jDom').value,limit:50,page:cp});
+  let d;try{d=await api('/api/js-findings?'+q);}catch(e){document.getElementById('jTable').innerHTML='<div class="empty">error</div>';return;}
+  const items=d.data||[];
+  document.getElementById('jCount').textContent=(d.total||0).toLocaleString()+' findings';
+  if(!items.length){document.getElementById('jTable').innerHTML='<div class="empty">no JS findings yet — run a scan with JS analysis enabled</div>';document.getElementById('jPager').innerHTML='';return;}
+  document.getElementById('jTable').innerHTML=`<table><thead><tr><th>Severity</th><th>Type</th><th>Value</th><th>JS File</th><th>Context</th><th>Found</th></tr></thead><tbody>${
+    items.map(f=>{
+      const isSecret=secrets.has(f.finding_type);
+      const dispVal=isSecret?redact(f.value):esc(f.value);
+      return`<tr>
+        <td>${sevBadge(f.severity)}</td>
+        <td><span class="badge bi">${esc(f.finding_type)}</span></td>
+        <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${isSecret?'[REDACTED — hover to copy raw]':esc(f.value)}">${dispVal}</td>
+        <td><a href="${esc(f.js_url)}" target="_blank" rel="noopener" class="link" style="max-width:180px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.js_url)}</a></td>
+        <td class="muted" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(f.context)}">${esc(f.context)||'—'}</td>
+        <td class="muted">${ago(f.first_seen)}</td>
+      </tr>`;
+    }).join('')
+  }</tbody></table>`;
+  pager(document.getElementById('jPager'),d.total,cp,50,d.pages,'load');
+}
+
+async function loadDoms(){
+  try{const d=(await api('/api/domains')).data||[];['jDom','jDomExp'].forEach(id=>{const s=document.getElementById(id);if(!s)return;while(s.options.length>(id==='jDom'?1:0))s.remove(id==='jDom'?1:0);d.forEach(dom=>{const o=document.createElement('option');o.value=o.textContent=dom;s.appendChild(o);});});}catch{}
+}
+function dlCSV(){const d=document.getElementById('jDomExp').value;if(!d){toast('select domain','warn');return;}dl('/api/export/csv?domain='+encodeURIComponent(d)+'&type=js');}
+function refresh(){loadStats();load(cp);}
+loadDoms();loadStats();load();
+</script>
+{{end}}

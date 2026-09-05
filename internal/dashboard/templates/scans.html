@@ -1,0 +1,48 @@
+{{define "content"}}
+<div class="card">
+  <div class="card-head">
+    <span class="card-title">// scan history</span>
+    <span class="card-count" id="sCount">—</span>
+    <div style="display:flex;gap:5px;margin-left:auto">
+      <select class="fs" id="sDomRep" style="height:26px"><option value="">select domain...</option></select>
+      <button class="btn btn-primary btn-sm" onclick="genReport()">Generate Report</button>
+    </div>
+  </div>
+  <div class="tw"><div id="sTable"><div class="loading"><div class="spin"></div></div></div></div>
+</div>
+{{end}}
+{{define "scripts"}}
+<script>
+async function load(){
+  let d;try{d=await api('/api/scans?limit=100');}catch(e){document.getElementById('sTable').innerHTML='<div class="empty">error loading scans</div>';return;}
+  const items=d.data||[];
+  document.getElementById('sCount').textContent=items.length+' scans';
+  if(!items.length){document.getElementById('sTable').innerHTML='<div class="empty">no scans yet — click New Scan</div>';return;}
+  const sc={completed:'var(--green)',running:'var(--cyan)',failed:'var(--red)'};
+  document.getElementById('sTable').innerHTML=`<table><thead><tr><th>#</th><th>Domain</th><th>Profile</th><th>Status</th><th>Assets</th><th>Hosts</th><th>Ports</th><th>JS</th><th>Duration</th><th>Started</th></tr></thead><tbody>${
+    items.map(s=>`<tr>
+      <td class="muted">${s.id}</td>
+      <td>${esc(s.domain)}</td>
+      <td><span class="badge ${s.profile==='aggressive'?'bc':s.profile==='stealth'?'bg':'bl'}">${s.profile||'standard'}</span></td>
+      <td><span class="badge" style="background:${sc[s.status]||'var(--text3)'}22;color:${sc[s.status]||'var(--text3)'};border-color:${sc[s.status]||'var(--text3)'}44">${s.status}</span></td>
+      <td>${s.assets_found||0}</td><td>${s.hosts_found||0}</td><td>${s.ports_found||0}</td>
+      <td>${s.js_findings||0}</td>
+      <td class="muted">${s.duration?s.duration+'s':'—'}</td>
+      <td class="muted">${fmtDate(s.started_at)}</td>
+    </tr>`).join('')
+  }</tbody></table>`;
+}
+async function loadDoms(){
+  try{const d=(await api('/api/domains')).data||[];const s=document.getElementById('sDomRep');while(s.options.length>1)s.remove(1);d.forEach(dom=>{const o=document.createElement('option');o.value=o.textContent=dom;s.appendChild(o);});}catch{}
+}
+function genReport(){
+  const d=document.getElementById('sDomRep').value;
+  if(!d){toast('select a domain first','warn');return;}
+  dl('/api/export/json?domain='+encodeURIComponent(d));
+  toast('Exporting JSON report for '+d,'info');
+}
+function refresh(){load();}
+loadDoms();load();
+sse.onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type==='scan_completed'||m.type==='scan_started'){load();loadDoms();}}catch{}};
+</script>
+{{end}}

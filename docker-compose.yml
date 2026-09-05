@@ -1,0 +1,10 @@
+services:
+  vantage:
+    build: .
+    container_name: vantage
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./vantage.db:/app/vantage.db
+      - ./screenshots:/app/screenshots
+    restart: unless-stopped

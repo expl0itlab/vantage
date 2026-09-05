@@ -1,0 +1,50 @@
+{{define "content"}}
+<div class="card">
+  <div class="card-head"><span class="card-title">// change tracking</span><span class="card-count" id="cCount">—</span></div>
+  <div class="filters">
+    <select class="fs" id="cDom" onchange="load(1)"><option value="">all domains</option></select>
+    <select class="fs" id="cSev" onchange="load(1)"><option value="">all severity</option><option value="critical">critical</option><option value="high">high</option><option value="medium">medium</option><option value="low">low</option><option value="info">info</option></select>
+    <select class="fs" id="cType" onchange="load(1)">
+      <option value="">all types</option>
+      <option value="new_subdomain">new subdomain</option>
+      <option value="new_host">new host</option>
+      <option value="new_port">new port</option>
+      <option value="js_secret">js secret</option>
+      <option value="new_ip_expanded">net expand</option>
+    </select>
+    <select class="fs" id="cLimit" onchange="load(1)"><option value="100">100/page</option><option value="250">250/page</option></select>
+  </div>
+  <div class="tw"><div id="cTable"><div class="loading"><div class="spin"></div></div></div></div>
+  <div id="cPager"></div>
+</div>
+{{end}}
+{{define "scripts"}}
+<script>
+let cp=1;
+async function load(p){
+  if(p)cp=p;
+  const limit=parseInt(document.getElementById('cLimit').value)||100;
+  const q=new URLSearchParams({domain:document.getElementById('cDom').value,severity:document.getElementById('cSev').value,event_type:document.getElementById('cType').value,limit,page:cp});
+  let d;try{d=await api('/api/changes?'+q);}catch(e){document.getElementById('cTable').innerHTML='<div class="empty">error</div>';return;}
+  const items=d.data||[];
+  document.getElementById('cCount').textContent=(d.total||0).toLocaleString()+' events';
+  if(!items.length){document.getElementById('cTable').innerHTML='<div class="empty">no changes recorded</div>';document.getElementById('cPager').innerHTML='';return;}
+  document.getElementById('cTable').innerHTML=`<table><thead><tr><th>Severity</th><th>Type</th><th>Domain</th><th>Description</th><th>Time</th></tr></thead><tbody>${
+    items.map(e=>`<tr>
+      <td>${sevBadge(e.severity)}</td>
+      <td><span class="badge bi">${esc(e.event_type.replace(/_/g,' '))}</span></td>
+      <td class="muted">${esc(e.domain)}</td>
+      <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.description)}">${esc(e.description)}</td>
+      <td class="muted">${ago(e.created_at)}</td>
+    </tr>`).join('')
+  }</tbody></table>`;
+  pager(document.getElementById('cPager'),d.total,cp,limit,d.pages,'load');
+}
+async function loadDoms(){
+  try{const d=(await api('/api/domains')).data||[];const s=document.getElementById('cDom');while(s.options.length>1)s.remove(1);d.forEach(dom=>{const o=document.createElement('option');o.value=o.textContent=dom;s.appendChild(o);});}catch{}
+}
+function refresh(){load(cp);}
+loadDoms();load();
+sse.onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type==='change'||m.type==='scan_completed')load(cp);}catch{}};
+</script>
+{{end}}

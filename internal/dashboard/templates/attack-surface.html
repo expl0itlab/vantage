@@ -1,0 +1,54 @@
+{{define "content"}}
+<div class="card">
+  <div class="card-head">
+    <span class="card-title">// attack surface map</span>
+    <span class="card-count" id="asCount">—</span>
+  </div>
+  <div class="filters">
+    <select class="fs" id="asDom" onchange="load(1)"><option value="">all domains</option></select>
+    <select class="fs" id="asSev" onchange="load(1)"><option value="">all severity</option><option value="high">high</option><option value="medium">medium</option><option value="low">low</option></select>
+    <label class="fl"><input type="checkbox" id="asInt" onchange="load(1)" checked> interesting only</label>
+  </div>
+  <div class="tw"><div id="asTable"><div class="loading"><div class="spin"></div></div></div></div>
+  <div id="asPager"></div>
+</div>
+{{end}}
+{{define "scripts"}}
+<script>
+let cp=1;
+async function load(p){
+  if(p)cp=p;
+  const intOnly=document.getElementById('asInt').checked;
+  const q=new URLSearchParams({domain:document.getElementById('asDom').value,interesting:intOnly?'1':'',limit:50,page:cp});
+  let d;try{d=await api('/api/hosts?'+q);}catch(e){document.getElementById('asTable').innerHTML='<div class="empty">error</div>';return;}
+  const items=(d.data||[]).filter(h=>h.attack_surface&&h.attack_surface!=='[]');
+  document.getElementById('asCount').textContent=(items.length)+' hosts with signals';
+  if(!items.length){document.getElementById('asTable').innerHTML='<div class="empty">no attack surface data — run a scan</div>';document.getElementById('asPager').innerHTML='';return;}
+
+  const sevF=document.getElementById('asSev').value;
+
+  let rows='';
+  items.forEach(h=>{
+    let notes=[];try{notes=JSON.parse(h.attack_surface||'[]');}catch{}
+    if(sevF)notes=notes.filter(n=>n.severity===sevF);
+    if(!notes.length)return;
+    rows+=`<tr>
+      <td><a href="${esc(h.url)}" target="_blank" class="link" style="max-width:200px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(h.url)}</a></td>
+      <td class="muted">${esc(h.ip)||'—'}</td>
+      <td><div style="display:flex;flex-wrap:wrap;gap:2px">${notes.map(n=>`<span class="as-note as-${n.severity}" title="${esc(n.detail)}">${esc(n.signal)}</span>`).join('')}</div></td>
+      <td style="max-width:300px"><div style="display:flex;flex-direction:column;gap:2px">${notes.map(n=>`<span style="font-size:10px;color:var(--text2)">${esc(n.detail)}</span>`).join('')}</div></td>
+    </tr>`;
+  });
+
+  if(!rows){document.getElementById('asTable').innerHTML='<div class="empty">no signals match filter</div>';return;}
+
+  document.getElementById('asTable').innerHTML=`<table><thead><tr><th>Host</th><th>IP</th><th>Signals</th><th>Details</th></tr></thead><tbody>${rows}</tbody></table>`;
+  pager(document.getElementById('asPager'),d.total,cp,50,d.pages,'load');
+}
+async function loadDoms(){
+  try{const d=(await api('/api/domains')).data||[];const s=document.getElementById('asDom');while(s.options.length>1)s.remove(1);d.forEach(dom=>{const o=document.createElement('option');o.value=o.textContent=dom;s.appendChild(o);});}catch{}
+}
+function refresh(){load(cp);}
+loadDoms();load();
+</script>
+{{end}}

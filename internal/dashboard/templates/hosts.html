@@ -1,0 +1,73 @@
+{{define "content"}}
+<div class="card">
+  <div class="card-head">
+    <span class="card-title">// live hosts</span>
+    <span class="card-count" id="hCount">—</span>
+    <div style="display:flex;gap:5px;margin-left:auto">
+      <select class="fs" id="hDomExp" style="height:26px"><option value="">domain...</option></select>
+      <button class="btn btn-ghost btn-sm" onclick="dlCSV()">CSV</button>
+      <button class="btn btn-ghost btn-sm" onclick="dlCaido()">Caido</button>
+      <button class="btn btn-ghost btn-sm" onclick="dlBurp()">Burp</button>
+      <button class="btn btn-ghost btn-sm" onclick="dlURLs()">URLs</button>
+    </div>
+  </div>
+  <div class="filters">
+    <input class="fi" id="hSearch" placeholder="URL, title, IP, server..." oninput="debounce(load,350)(1)">
+    <select class="fs" id="hDom" onchange="load(1)"><option value="">all domains</option></select>
+    <select class="fs" id="hCode" onchange="load(1)">
+      <option value="">all codes</option>
+      <option value="200">200</option><option value="301">301</option><option value="302">302</option>
+      <option value="401">401</option><option value="403">403</option><option value="404">404</option><option value="500">500</option>
+    </select>
+    <label class="fl"><input type="checkbox" id="hInt" onchange="load(1)"> interesting only</label>
+  </div>
+  <div class="tw"><div id="hTable"><div class="loading"><div class="spin"></div></div></div></div>
+  <div id="hPager"></div>
+</div>
+{{end}}
+{{define "scripts"}}
+<script>
+let cp=1;
+async function load(p){
+  if(p)cp=p;
+  const q=new URLSearchParams({search:document.getElementById('hSearch').value,domain:document.getElementById('hDom').value,status_code:document.getElementById('hCode').value,interesting:document.getElementById('hInt').checked?'1':'',limit:50,page:cp});
+  let d;try{d=await api('/api/hosts?'+q);}catch(e){document.getElementById('hTable').innerHTML='<div class="empty">error</div>';return;}
+  const items=d.data||[];
+  document.getElementById('hCount').textContent=(d.total||0).toLocaleString()+' hosts';
+  const dom=document.getElementById('hDom').value||(items[0]&&items[0].url&&new URL(items[0].url).hostname)||'';
+  syncDom(dom);
+  if(!items.length){document.getElementById('hTable').innerHTML='<div class="empty">no live hosts — run a scan</div>';document.getElementById('hPager').innerHTML='';return;}
+  document.getElementById('hTable').innerHTML=`<table><thead><tr><th>URL</th><th>Code</th><th>Title</th><th>IP</th><th>Server</th><th>Tech</th><th>Tag</th><th>Screenshot</th><th>Last Seen</th></tr></thead><tbody>${
+    items.map(h=>{
+      let techs=[];try{techs=JSON.parse(h.technologies||'[]');}catch{}
+      const cc=h.status_code<300?'var(--green)':h.status_code<400?'var(--yellow)':h.status_code<500?'var(--orange)':'var(--red)';
+      const techBadges=techs.slice(0,3).map(t=>'<span class="badge bi" style="margin-right:1px">'+esc(t.split(':')[0])+'</span>').join('');
+      const shot=h.screenshot_path?`<a href="/screenshots/${esc(h.screenshot_path.split('/').pop())}" target="_blank" style="color:var(--cyan);font-family:var(--mono);font-size:10px">view</a>`:'—';
+      return`<tr${h.interesting?' style="background:rgba(155,110,245,.03)"':''}>
+        <td><a href="${esc(h.url)}" target="_blank" rel="noopener" class="link" style="max-width:220px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(h.url)}</a></td>
+        <td style="color:${cc};font-weight:600">${h.status_code}</td>
+        <td class="dim" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(h.title)}">${esc(h.title)||'—'}</td>
+        <td class="muted">${esc(h.ip)||'—'}</td>
+        <td class="muted">${esc(h.server)||'—'}</td>
+        <td>${techBadges||'—'}</td>
+        <td>${h.interest_tag?'<span class="badge bp">'+esc(h.interest_tag)+'</span>':''}</td>
+        <td>${shot}</td>
+        <td class="muted">${ago(h.last_seen)}</td>
+      </tr>`;
+    }).join('')
+  }</tbody></table>`;
+  pager(document.getElementById('hPager'),d.total,cp,50,d.pages,'load');
+}
+async function loadDoms(){
+  try{const d=(await api('/api/domains')).data||[];['hDom','hDomExp'].forEach(id=>{const s=document.getElementById(id);if(!s)return;while(s.options.length>(id==='hDom'?1:0))s.remove(id==='hDom'?1:0);d.forEach(dom=>{const o=document.createElement('option');o.value=o.textContent=dom;s.appendChild(o);});});}catch{}
+}
+function syncDom(d){const s=document.getElementById('hDomExp');if(s&&d&&!s.value)s.value=d;}
+function getDom(){const d=document.getElementById('hDomExp').value;if(!d){toast('select a domain','warn');}return d;}
+function dlCSV(){const d=getDom();if(d)dl('/api/export/csv?domain='+encodeURIComponent(d)+'&type=hosts');}
+function dlCaido(){const d=getDom();if(d)dl('/api/export/caido?domain='+encodeURIComponent(d));}
+function dlBurp(){const d=getDom();if(d)dl('/api/export/burp?domain='+encodeURIComponent(d));}
+function dlURLs(){const d=getDom();if(d)dl('/api/export/targets?domain='+encodeURIComponent(d)+'&type=urls');}
+function refresh(){load(cp);}
+loadDoms();load();
+</script>
+{{end}}

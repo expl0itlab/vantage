@@ -1,0 +1,86 @@
+# Vantage Configuration — Red Team Edition
+# Generated: 2026
+
+database:
+  path: "./vantage.db"
+
+targets:
+  - domain: "example.com"
+    profile: "standard"
+    disabled: false
+
+discovery:
+  sources:
+    - subfinder
+    - assetfinder
+  brute_force: false
+  rate_limit: 200
+  max_subdomains: 10000
+  timeout: 10
+
+scanning:
+  httpx:
+    threads: 50
+    timeout: 10
+    retries: 2
+    follow_redirects: true
+    max_redirects: 3
+    tech_detect: true
+    tls_probe: true
+
+  naabu:
+    ports: "top-100"
+    threads: 25
+    rate_limit: 1000
+    retries: 2
+    timeout: 100
+
+  banner:
+    enabled: true
+    timeout: 5
+    threads: 30
+
+  js_analysis:
+    enabled: true
+    threads: 20
+    timeout: 15
+    max_file_size_kb: 2048
+    extract_paths: true
+    extract_secrets: true
+
+  screenshot:
+    enabled: true
+    timeout: 20
+    output_dir: "./screenshots"
+    threads: 4
+
+  net_expand:
+    enabled: false          # enable for aggressive internal recon
+    max_hosts: 254
+    ports: "top-100"
+    require_confirm: true   # safety: require explicit --expand flag
+
+dashboard:
+  host: "127.0.0.1"
+  port: 8080
+  username: ""             # set for basic auth
+  password: ""
+
+scheduler:
+  enabled: false
+  schedule: "0 0 2 * * *"  # daily 02:00
+
+telegram:
+  enabled: false
+  bot_token: ""            # get from @BotFather on Telegram
+  chat_id: ""              # your chat or group ID
+  min_severity: "high"     # critical, high, medium, low, info
+
+tools:
+  subfinder_path:    "subfinder"
+  assetfinder_path:  "assetfinder"
+  amass_path:        "amass"
+  httpx_path:        "httpx"
+  naabu_path:        "naabu"
+  dnsx_path:         "dnsx"
+  gowitness_path:    "gowitness"

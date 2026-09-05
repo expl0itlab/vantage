@@ -1,0 +1,55 @@
+{{define "content"}}
+<div class="card">
+  <div class="card-head">
+    <span class="card-title">// asset inventory</span>
+    <span class="card-count" id="aCount">—</span>
+    <div style="display:flex;gap:5px;margin-left:auto">
+      <select class="fs" id="aDomExp" style="height:26px"><option value="">domain...</option></select>
+      <button class="btn btn-ghost btn-sm" onclick="dlCSV()">CSV</button>
+      <button class="btn btn-ghost btn-sm" onclick="dlJSON()">JSON</button>
+    </div>
+  </div>
+  <div class="filters">
+    <input class="fi" id="aSearch" placeholder="subdomain, IP..." oninput="debounce(load,350)(1)">
+    <select class="fs" id="aDom" onchange="load(1)"><option value="">all domains</option></select>
+    <select class="fs" id="aType" onchange="load(1)"><option value="">all types</option><option value="domain">domain</option><option value="subdomain">subdomain</option><option value="ip">ip</option></select>
+    <select class="fs" id="aStatus" onchange="load(1)"><option value="">all status</option><option value="active">active</option><option value="inactive">inactive</option></select>
+    <label class="fl"><input type="checkbox" id="aInt" onchange="load(1)"> interesting only</label>
+  </div>
+  <div class="tw"><div id="aTable"><div class="loading"><div class="spin"></div></div></div></div>
+  <div id="aPager"></div>
+</div>
+{{end}}
+{{define "scripts"}}
+<script>
+let cp=1;
+async function load(p){
+  if(p)cp=p;
+  const q=new URLSearchParams({search:document.getElementById('aSearch').value,domain:document.getElementById('aDom').value,type:document.getElementById('aType').value||'',status:document.getElementById('aStatus').value,interesting:document.getElementById('aInt').checked?'1':'',limit:100,page:cp});
+  let d; try{d=await api('/api/assets?'+q);}catch(e){document.getElementById('aTable').innerHTML='<div class="empty">error loading</div>';return;}
+  const items=d.data||[];
+  document.getElementById('aCount').textContent=(d.total||0).toLocaleString()+' assets';
+  syncDomExport(document.getElementById('aDom').value||(items[0]&&items[0].domain)||'');
+  if(!items.length){document.getElementById('aTable').innerHTML='<div class="empty">no assets</div>';document.getElementById('aPager').innerHTML='';return;}
+  document.getElementById('aTable').innerHTML=`<table><thead><tr><th>Subdomain</th><th>Domain</th><th>IP</th><th>Type</th><th>Status</th><th>Tag</th><th>First Seen</th><th>Last Seen</th></tr></thead><tbody>${
+    items.map(a=>`<tr${a.interesting?' style="background:rgba(155,110,245,.03)"':''}>
+      <td>${esc(a.subdomain)}</td><td class="muted">${esc(a.domain)}</td>
+      <td>${a.ip?esc(a.ip):'<span style="color:var(--text3)">—</span>'}</td>
+      <td><span class="badge bi">${a.asset_type}</span></td>
+      <td><span class="badge ${a.status==='active'?'bg':'bi'}">${a.status}</span></td>
+      <td>${a.interest_tag?'<span class="badge bp">'+esc(a.interest_tag)+'</span>':''}</td>
+      <td class="muted">${fmtDate(a.first_seen)}</td><td class="muted">${ago(a.last_seen)}</td>
+    </tr>`).join('')
+  }</tbody></table>`;
+  pager(document.getElementById('aPager'),d.total,cp,100,d.pages,'load');
+}
+async function loadDoms(){
+  try{const d=(await api('/api/domains')).data||[];['aDom','aDomExp'].forEach(id=>{const s=document.getElementById(id);if(!s)return;while(s.options.length>(id==='aDom'?1:0))s.remove(id==='aDom'?1:0);d.forEach(dom=>{const o=document.createElement('option');o.value=o.textContent=dom;s.appendChild(o);});});}catch{}
+}
+function syncDomExport(d){const s=document.getElementById('aDomExp');if(s&&d)s.value=d;}
+function dlCSV(){const d=document.getElementById('aDomExp').value;if(!d){toast('select domain','warn');return;}dl('/api/export/csv?domain='+encodeURIComponent(d)+'&type=assets');}
+function dlJSON(){const d=document.getElementById('aDomExp').value;if(!d){toast('select domain','warn');return;}dl('/api/export/json?domain='+encodeURIComponent(d));}
+function refresh(){load(cp);}
+loadDoms();load();
+</script>
+{{end}}

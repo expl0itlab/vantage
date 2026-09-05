@@ -1,0 +1,68 @@
+{{define "content"}}
+<div style="margin-bottom:12px;padding:10px 14px;background:rgba(155,110,245,.06);border:1px solid rgba(155,110,245,.2);border-radius:6px;font-size:11px;color:var(--text2);font-family:var(--mono);line-height:1.6">
+  <strong style="color:var(--purple)">// high-value targets</strong> — admin panels, login pages, APIs, dev environments, and dangerous open ports. Export directly to Caido or Burp.
+</div>
+<div class="two" style="margin-bottom:14px">
+  <div class="card">
+    <div class="card-head"><span class="card-title">// interesting hosts</span><span class="card-count" id="ihCount">—</span></div>
+    <div class="filters">
+      <select class="fs" id="ihTag" onchange="loadHosts(1)"><option value="">all tags</option><option value="admin-panel">admin-panel</option><option value="login-page">login-page</option><option value="api">api</option><option value="dev-env">dev-env</option></select>
+      <select class="fs" id="ihDom" onchange="loadHosts(1)"><option value="">all domains</option></select>
+    </div>
+    <div class="tw"><div id="ihTable"><div class="loading"><div class="spin"></div></div></div></div>
+    <div id="ihPager"></div>
+  </div>
+  <div class="card">
+    <div class="card-head"><span class="card-title">// high-risk ports</span><span class="card-count" id="ipCount">—</span></div>
+    <div class="tw"><div id="ipTable"><div class="loading"><div class="spin"></div></div></div></div>
+  </div>
+</div>
+{{end}}
+{{define "scripts"}}
+<script>
+let hp=1;
+async function loadHosts(p){
+  if(p)hp=p;
+  const tag=document.getElementById('ihTag').value;
+  const dom=document.getElementById('ihDom').value;
+  const q=new URLSearchParams({interesting:'1',domain:dom,limit:25,page:hp});
+  let d;try{d=await api('/api/hosts?'+q);}catch{document.getElementById('ihTable').innerHTML='<div class="empty">error</div>';return;}
+  let items=(d.data||[]);
+  if(tag)items=items.filter(h=>h.interest_tag===tag);
+  document.getElementById('ihCount').textContent=items.length+' hosts';
+  if(!items.length){document.getElementById('ihTable').innerHTML='<div class="empty">no interesting hosts found</div>';return;}
+  const tagCls={'admin-panel':'bc','login-page':'bh','api':'bk','dev-env':'bm'};
+  document.getElementById('ihTable').innerHTML=`<table><thead><tr><th>URL</th><th>Tag</th><th>Code</th><th>Title</th></tr></thead><tbody>${
+    items.map(h=>{
+      const cc=h.status_code<300?'var(--green)':h.status_code<400?'var(--yellow)':'var(--orange)';
+      return`<tr style="background:rgba(155,110,245,.03)">
+        <td><a href="${esc(h.url)}" target="_blank" class="link" style="max-width:200px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(h.url)}</a></td>
+        <td><span class="badge ${tagCls[h.interest_tag]||'bi'}">${esc(h.interest_tag)}</span></td>
+        <td style="color:${cc};font-weight:600">${h.status_code}</td>
+        <td class="dim" style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(h.title)||'—'}</td>
+      </tr>`;
+    }).join('')
+  }</tbody></table>`;
+  pager(document.getElementById('ihPager'),d.total,hp,25,d.pages,'loadHosts');
+}
+async function loadPorts(){
+  let d;try{d=await api('/api/ports?interesting=1&risk=high&limit=50');}catch{document.getElementById('ipTable').innerHTML='<div class="empty">error</div>';return;}
+  const items=d.data||[];
+  document.getElementById('ipCount').textContent=(d.total||0)+' ports';
+  if(!items.length){document.getElementById('ipTable').innerHTML='<div class="empty">no high-risk ports</div>';return;}
+  document.getElementById('ipTable').innerHTML=`<table><thead><tr><th>IP</th><th>Port</th><th>Service</th><th>Banner</th></tr></thead><tbody>${
+    items.map(p=>`<tr style="background:rgba(232,58,58,.03)">
+      <td>${esc(p.ip)}</td>
+      <td style="color:var(--red);font-weight:700">${p.port}</td>
+      <td><span class="badge bc">${esc(p.service)||'unknown'}</span></td>
+      <td class="muted" style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.banner)}">${esc(p.banner)||'—'}</td>
+    </tr>`).join('')
+  }</tbody></table>`;
+}
+async function loadDoms(){
+  try{const d=(await api('/api/domains')).data||[];['ihDom'].forEach(id=>{const s=document.getElementById(id);while(s.options.length>1)s.remove(1);d.forEach(dom=>{const o=document.createElement('option');o.value=o.textContent=dom;s.appendChild(o);});});}catch{}
+}
+function refresh(){loadHosts(1);loadPorts();}
+loadDoms();loadHosts();loadPorts();
+</script>
+{{end}}

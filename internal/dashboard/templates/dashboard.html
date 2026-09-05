@@ -1,0 +1,98 @@
+{{define "content"}}
+<div class="stat-grid" id="stats"><div class="loading"><div class="spin"></div></div></div>
+<div class="two">
+  <div class="card">
+    <div class="card-head"><span class="card-title">// recent scans</span><span class="card-count" id="sc-count">—</span></div>
+    <div id="sc-body"><div class="loading"><div class="spin"></div></div></div>
+  </div>
+  <div class="card">
+    <div class="card-head"><span class="card-title">// latest changes</span><a href="/changes" style="font-size:10px;color:var(--text3);text-decoration:none;font-family:var(--mono)">all →</a></div>
+    <div id="ch-body"><div class="loading"><div class="spin"></div></div></div>
+  </div>
+</div>
+<div class="card">
+  <div class="card-head"><span class="card-title">// scan activity</span><span style="font-size:10px;color:var(--text3);font-family:var(--mono)" id="phaseLbl"></span></div>
+  <div style="padding:12px 15px"><div class="slog" id="slog">No active scan.</div></div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+async function refresh() {
+  let d;
+  try { d = (await api('/api/stats')).data; } catch(e) { return; }
+  if (!d) return;
+  const cards = [
+    {label:'ASSETS',      val:d.total_assets,       sub:d.monitored_domains+' domains'},
+    {label:'LIVE HOSTS',  val:d.active_hosts,        sub:'HTTP/S'},
+    {label:'OPEN PORTS',  val:d.open_ports,          sub:d.high_risk_ports+' high-risk'},
+    {label:'INTERESTING', val:d.interesting_hosts,   sub:'manual targets'},
+    {label:'JS FINDINGS', val:d.js_findings,         sub:'secrets & endpoints'},
+    {label:'CHANGES 24H', val:d.new_changes,         sub:'last 24 hours'},
+    {label:'SCREENSHOTS', val:d.screenshots,         sub:'captured'},
+    {label:'SCANS',       val:d.total_scans,         sub:d.last_scan_time?ago(d.last_scan_time):'none'},
+  ];
+  document.getElementById('stats').innerHTML = cards.map(c =>
+    '<div class="stat-card"><div class="stat-label">'+c.label+'</div><div class="stat-val">'+
+    (c.val||0)+'</div><div class="stat-sub">'+c.sub+'</div></div>'
+  ).join('');
+}
+
+async function loadScans() {
+  let d;
+  try { d = await api('/api/scans?limit=6'); } catch(e) { document.getElementById('sc-body').innerHTML='<div class="empty">no scans yet</div>'; return; }
+  const scans = d.data || [];
+  document.getElementById('sc-count').textContent = scans.length;
+  if (!scans.length) { document.getElementById('sc-body').innerHTML='<div class="empty">no scans yet — run a scan</div>'; return; }
+  const sc = {completed:'var(--green)',running:'var(--cyan)',failed:'var(--red)'};
+  document.getElementById('sc-body').innerHTML = scans.map(s => `
+    <div class="feed-item">
+      <div class="feed-dot" style="background:${sc[s.status]||'var(--text3)'}"></div>
+      <div class="feed-content">
+        <div class="feed-desc">${esc(s.domain)} <span style="color:var(--text3)">[${s.profile||'standard'}]</span></div>
+        <div class="feed-meta">${s.status} · ${s.assets_found||0} assets · ${s.hosts_found||0} hosts · ${s.ports_found||0} ports · ${s.js_findings||0} js · ${ago(s.started_at)}</div>
+      </div>
+    </div>`).join('');
+}
+
+async function loadChanges() {
+  let d;
+  try { d = await api('/api/changes?limit=15'); } catch(e) { document.getElementById('ch-body').innerHTML='<div class="empty">no changes</div>'; return; }
+  const evts = d.data || [];
+  if (!evts.length) { document.getElementById('ch-body').innerHTML='<div class="empty">no changes detected yet</div>'; return; }
+  const dc = {critical:'var(--red)',high:'var(--orange)',medium:'var(--yellow)',low:'var(--accent)',info:'var(--text3)'};
+  document.getElementById('ch-body').innerHTML = evts.map(e => `
+    <div class="feed-item">
+      <div class="feed-dot" style="background:${dc[e.severity]||'var(--text3)'}"></div>
+      <div class="feed-content">
+        <div class="feed-desc">${esc(e.description)}</div>
+        <div class="feed-meta">${e.event_type.replace(/_/g,' ')} · ${esc(e.domain)} · ${ago(e.created_at)}</div>
+      </div>
+    </div>`).join('');
+}
+
+const slog = document.getElementById('slog');
+function log(txt, cls) {
+  const ln = document.createElement('div');
+  ln.className = 'll' + (cls?' '+cls:'');
+  ln.textContent = '['+new Date().toLocaleTimeString('en-GB')+'] ' + txt;
+  slog.appendChild(ln);
+  slog.scrollTop = slog.scrollHeight;
+  if (slog.children.length > 200) slog.removeChild(slog.firstChild);
+}
+
+sse.onmessage = e => {
+  try {
+    const m = JSON.parse(e.data);
+    if (m.type==='phase') { document.getElementById('phaseLbl').textContent='['+m.data.phase+']'; log('phase: '+m.data.phase,'info'); }
+    else if (m.type==='scan_started') { log('scan started: '+m.data.domain+' ['+m.data.profile+']','ok'); refresh(); }
+    else if (m.type==='scan_completed') { log('complete: '+m.data.domain+' — '+m.data.duration+'s / '+m.data.changes+' changes','ok'); document.getElementById('phaseLbl').textContent=''; refresh(); loadScans(); loadChanges(); }
+    else if (m.type==='change') { log(m.data.description, m.data.severity==='high'||m.data.severity==='critical'?'warn':''); }
+  } catch{}
+};
+
+function onScanComplete() { refresh(); loadScans(); loadChanges(); }
+refresh(); loadScans(); loadChanges();
+setInterval(refresh, 30000);
+</script>
+{{end}}
